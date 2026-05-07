@@ -8,11 +8,13 @@ def test_normalize_result_keeps_search_metadata() -> None:
             "file_path": "app/users.py",
             "language": "python",
             "symbol": "UserValidator",
+            "entity_type": "class",
             "start_line": 1,
             "end_line": 3,
             "code": "class UserValidator:\n    pass",
             "_distance": 0.25,
-        }
+        },
+        graph_store=None,
     )
 
     assert result == {
@@ -20,8 +22,10 @@ def test_normalize_result_keeps_search_metadata() -> None:
         "file_path": "app/users.py",
         "language": "python",
         "symbol": "UserValidator",
+        "entity_type": "class",
         "start_line": 1,
         "end_line": 3,
         "code": "class UserValidator:\n    pass",
-        "score": 0.25,
+        "distance": 0.25,
+        "graph_context": None,
     }
