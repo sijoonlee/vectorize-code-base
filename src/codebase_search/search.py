@@ -24,6 +24,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--query", required=True, help="Natural language search query.")
     parser.add_argument("--limit", type=int, default=5, help="Number of results to return. Default: 5")
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Ollama embedding model. Default: {DEFAULT_MODEL}")
+    parser.add_argument("--scope", default=None,
+                        help="Restrict results to files under this directory prefix "
+                             "(e.g. microservice/services/edb).")
     parser.add_argument("--graph-db", default=os.environ.get("CODEBASE_GRAPH_DB"),
                         help="Path to the graph DB directory for context enrichment. Env: CODEBASE_GRAPH_DB")
     parser.add_argument("--graph-backend", default=os.environ.get("CODEBASE_GRAPH_BACKEND", "kuzu"),
@@ -47,7 +50,11 @@ def main() -> None:
 
     table = db.open_table(TABLE_NAME)
     query_vector = embed_text(args.query, model=args.model)
-    results = table.search(query_vector).limit(args.limit).to_list()
+    lance_query = table.search(query_vector)
+    if args.scope:
+        scope_prefix = args.scope.rstrip("/").replace("'", "''") + "/"
+        lance_query = lance_query.where(f"file_path LIKE '{scope_prefix}%'")
+    results = lance_query.limit(args.limit).to_list()
 
     normalized = [_normalize_result(result, graph_store) for result in results]
 
@@ -57,7 +64,7 @@ def main() -> None:
     if args.json:
         print(json.dumps(normalized, indent=2))
     else:
-        _print_results(normalized)
+        _print_results(normalized, scope=args.scope)
 
 
 def _normalize_result(result: dict[str, Any], graph_store: GraphStore | None) -> dict[str, Any]:
@@ -151,7 +158,9 @@ def _fetch_descendants(graph_store: GraphStore, entity_id: str, depth: int) -> l
     return sorted(all_descendants, key=lambda x: (x["entity_type"], x["label"]))
 
 
-def _print_results(results: list[dict[str, Any]]) -> None:
+def _print_results(results: list[dict[str, Any]], scope: str | None = None) -> None:
+    if scope:
+        print(f"scope: {scope.rstrip('/')}/")
     for index, result in enumerate(results, start=1):
         symbol = f" {result['symbol']}" if result["symbol"] else ""
         distance = result["distance"]

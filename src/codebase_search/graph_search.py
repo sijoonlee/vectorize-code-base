@@ -21,6 +21,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Entity name or partial label to search for (case-insensitive).")
     parser.add_argument("--depth", type=int, default=1,
                         help="Max traversal depth when using --query. Default: 1")
+    parser.add_argument("--scope", default=None,
+                        help="Restrict results to entities whose file_path starts with this "
+                             "directory prefix (e.g. microservice/services/edb).")
     parser.add_argument("--roots", action="store_true",
                         help="List all root nodes (no incoming edges), or root ancestor of --query.")
     parser.add_argument("--leaves", action="store_true",
@@ -37,36 +40,42 @@ def main() -> None:
         raise SystemExit("Provide --query, --roots, or --leaves.")
 
     graph_store = create_graph_store(args.graph_backend, args.graph_db)
+    scope_prefix = args.scope.rstrip("/") + "/" if args.scope else None
 
     if args.roots and not args.query:
+        scope_clause = " AND n.file_path STARTS WITH $scope" if scope_prefix else ""
         rows = graph_store.query(
-            "MATCH (n:Entity) WHERE NOT ()-[:RELATES]->(n) "
+            f"MATCH (n:Entity) WHERE NOT ()-[:RELATES]->(n){scope_clause} "
             "RETURN n.id AS id, n.label AS label, n.entity_type AS entity_type, "
             "n.file_path AS file_path, n.source_location AS source_location "
             "ORDER BY n.file_path",
+            {"scope": scope_prefix} if scope_prefix else None,
         )
         graph_store.close()
         _print_or_json(rows, args.json, "No root nodes found.")
         return
 
     if args.leaves and not args.query:
+        scope_clause = " AND n.file_path STARTS WITH $scope" if scope_prefix else ""
         rows = graph_store.query(
-            "MATCH (n:Entity) WHERE NOT (n)-[:RELATES]->() "
+            f"MATCH (n:Entity) WHERE NOT (n)-[:RELATES]->(){scope_clause} "
             "RETURN n.id AS id, n.label AS label, n.entity_type AS entity_type, "
             "n.file_path AS file_path, n.source_location AS source_location "
             "ORDER BY n.entity_type, n.label",
+            {"scope": scope_prefix} if scope_prefix else None,
         )
         graph_store.close()
         _print_or_json(rows, args.json, "No leaf nodes found.")
         return
 
     # --query mode
+    scope_clause = " AND n.file_path STARTS WITH $scope" if scope_prefix else ""
     matches = graph_store.query(
-        "MATCH (n:Entity) WHERE lower(n.label) CONTAINS lower($q) "
+        f"MATCH (n:Entity) WHERE lower(n.label) CONTAINS lower($q){scope_clause} "
         "RETURN n.id AS id, n.label AS label, n.entity_type AS entity_type, "
         "n.file_path AS file_path, n.source_location AS source_location "
         "ORDER BY n.entity_type, n.label",
-        {"q": args.query},
+        {"q": args.query, **({"scope": scope_prefix} if scope_prefix else {})},
     )
 
     if not matches:
