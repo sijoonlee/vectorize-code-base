@@ -49,6 +49,7 @@ class CodeChunk:
     file_path: str
     language: str
     symbol: str
+    entity_type: str  # "class", "function", or ""
     start_line: int
     end_line: int
     code: str
@@ -59,6 +60,7 @@ class CodeChunk:
             "file_path": self.file_path,
             "language": self.language,
             "symbol": self.symbol,
+            "entity_type": self.entity_type,
             "start_line": self.start_line,
             "end_line": self.end_line,
             "code": self.code,
@@ -93,7 +95,7 @@ def chunk_file(path: Path, repo: Path) -> list[CodeChunk]:
     rel_path = path.relative_to(repo).as_posix()
     line_starts = _line_start_offsets(text)
     chunks = _chunk_tree_sitter(text, path.suffix.lower(), lines, line_starts, rel_path, language)
-    return chunks or _split_code_text(text, path.suffix.lower(), lines, line_starts, rel_path, language, "")
+    return chunks or _split_code_text(text, path.suffix.lower(), lines, line_starts, rel_path, language, "", "")
 
 
 def _chunk_tree_sitter(
@@ -127,6 +129,7 @@ def _chunk_tree_sitter(
             continue
 
         symbol = name_node.text.decode()
+        entity_type = _entity_type_for_node(symbol_node)
         chunks.extend(
             _split_code_text(
                 text,
@@ -136,6 +139,7 @@ def _chunk_tree_sitter(
                 rel_path,
                 language,
                 symbol,
+                entity_type,
                 start_offset=node.start_byte,
                 end_offset=node.end_byte,
             )
@@ -162,6 +166,19 @@ def _tree_sitter_language_for_suffix(suffix: str) -> Language | None:
     if suffix == ".tsx":
         return Language(tree_sitter_typescript.language_tsx())
     return None
+
+
+def _entity_type_for_node(node: Node) -> str:
+    if node.type in {"class_declaration", "class_definition"}:
+        return "class"
+    if node.type in {
+        "function_declaration",
+        "function_definition",
+        "generator_function_declaration",
+        "variable_declarator",
+    }:
+        return "function"
+    return ""
 
 
 def _symbol_node_for_top_level_node(node: Node) -> Node | None:
@@ -209,6 +226,7 @@ def _split_code_text(
     rel_path: str,
     language: str,
     symbol: str,
+    entity_type: str,
     start_offset: int = 0,
     end_offset: int | None = None,
 ) -> list[CodeChunk]:
@@ -230,7 +248,7 @@ def _split_code_text(
         absolute_end = absolute_start + len(split)
         start_line = _line_number_for_offset(line_starts, absolute_start)
         end_line = _line_number_for_offset(line_starts, max(absolute_start, absolute_end - 1))
-        chunks.append(_make_chunk(rel_path, language, symbol, start_line, end_line, lines, split))
+        chunks.append(_make_chunk(rel_path, language, symbol, entity_type, start_line, end_line, lines, split))
         search_from = max(absolute_start + 1, absolute_end - DEFAULT_CHUNK_OVERLAP)
     return chunks
 
@@ -276,6 +294,7 @@ def _make_chunk(
     rel_path: str,
     language: str,
     symbol: str,
+    entity_type: str,
     start_line: int,
     end_line: int,
     lines: list[str],
@@ -289,6 +308,7 @@ def _make_chunk(
         file_path=rel_path,
         language=language,
         symbol=symbol,
+        entity_type=entity_type,
         start_line=start_line,
         end_line=end_line,
         code=code,

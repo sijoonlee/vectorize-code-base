@@ -3,7 +3,7 @@ name = "codebase-search"
 version = "0.1.0"
 description = "Local vector search for codebases using Ollama embeddings and LanceDB."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "langchain-ollama>=1.0.0",
     "lancedb>=0.25.0",
@@ -12,11 +12,18 @@ dependencies = [
     "tree-sitter-javascript>=0.25.0",
     "tree-sitter-typescript>=0.23.2",
     "langchain-text-splitters>=1.1.2",
+    "kuzu>=0.7.0",
+    "python-dotenv>=1.0.0",
 ]
+
+[project.optional-dependencies]
+neo4j = ["neo4j>=5.0.0"]
 
 [project.scripts]
 codebase-index = "codebase_search.index:main"
 codebase-search = "codebase_search.search:main"
+codebase-remove = "codebase_search.remove:main"
+codebase-graph-traverse = "codebase_search.graph_search:main"
 
 [dependency-groups]
 dev = [
