@@ -24,8 +24,13 @@ def embed_texts(texts: Sequence[str], model: str = DEFAULT_MODEL) -> list[list[f
     return [list(vector) for vector in vectors]
 
 
+_embeddings_cache: dict[str, OllamaEmbeddings] = {}
+
+
 def _load_embeddings(model: str = DEFAULT_MODEL) -> OllamaEmbeddings:
-    return OllamaEmbeddings(model=model)
+    if model not in _embeddings_cache:
+        _embeddings_cache[model] = OllamaEmbeddings(model=model)
+    return _embeddings_cache[model]
 
 
 def _format_query_text(text: str, model: str) -> str:
