@@ -38,7 +38,7 @@ def run_index(repo: Path, model: str = DEFAULT_MODEL, batch_size: int = 16) -> d
     db_path, graph_db_path = derive_db_paths(repo)
     cache_dir = db_path / "cache"
     db_path.mkdir(parents=True, exist_ok=True)
-    graph_db_path.mkdir(parents=True, exist_ok=True)
+    graph_db_path.parent.mkdir(parents=True, exist_ok=True)
 
     graph_store = create_graph_store("kuzu", str(graph_db_path))
     graph_store.clear()
