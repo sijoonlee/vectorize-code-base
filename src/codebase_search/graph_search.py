@@ -3,20 +3,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
+from codebase_search.db_paths import derive_db_paths
 from codebase_search.graph.base import GraphStore
 from codebase_search.graph.factory import create_graph_store
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Traverse the code graph by entity name or file path.")
-    _env_graph_db = os.environ.get("CODEBASE_GRAPH_DB")
-    parser.add_argument("--graph-db", default=_env_graph_db, required=_env_graph_db is None,
-                        help="Path to the graph DB directory. Env: CODEBASE_GRAPH_DB")
-    parser.add_argument("--graph-backend", default=os.environ.get("CODEBASE_GRAPH_BACKEND", "kuzu"),
-                        choices=["kuzu", "neo4j"], help="Graph backend. Env: CODEBASE_GRAPH_BACKEND. Default: kuzu")
+    parser.add_argument("--repo", default=os.environ.get("CODEBASE_REPO", str(Path.cwd())),
+                        help="Path to the repo root. Defaults to CWD. Env: CODEBASE_REPO")
     parser.add_argument("--query", default=None,
                         help="Entity name or partial label to search for (case-insensitive).")
     parser.add_argument("--depth", type=int, default=1,
@@ -39,7 +38,8 @@ def main() -> None:
     if not args.query and not args.roots and not args.leaves:
         raise SystemExit("Provide --query, --roots, or --leaves.")
 
-    graph_store = create_graph_store(args.graph_backend, args.graph_db)
+    _, graph_db_path = derive_db_paths(Path(args.repo).expanduser().resolve())
+    graph_store = create_graph_store("kuzu", str(graph_db_path))
     scope_prefix = args.scope.rstrip("/") + "/" if args.scope else None
 
     if args.roots and not args.query:

@@ -10,6 +10,7 @@ from typing import Any
 
 import lancedb
 
+from codebase_search.db_paths import derive_db_paths
 from codebase_search.embed import DEFAULT_MODEL, embed_text
 from codebase_search.graph.base import GraphStore
 from codebase_search.graph.factory import create_graph_store
@@ -18,19 +19,14 @@ from codebase_search.index import TABLE_NAME
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Search an indexed codebase.")
-    _env_db = os.environ.get("CODEBASE_DB")
-    parser.add_argument("--db", default=_env_db, required=_env_db is None,
-                        help="Path to the LanceDB directory. Env: CODEBASE_DB")
+    parser.add_argument("--repo", default=os.environ.get("CODEBASE_REPO", str(Path.cwd())),
+                        help="Path to the repo root. Defaults to CWD. Env: CODEBASE_REPO")
     parser.add_argument("--query", required=True, help="Natural language search query.")
     parser.add_argument("--limit", type=int, default=5, help="Number of results to return. Default: 5")
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Ollama embedding model. Default: {DEFAULT_MODEL}")
     parser.add_argument("--scope", default=None,
                         help="Restrict results to files under this directory prefix "
-                             "(e.g. microservice/services/edb).")
-    parser.add_argument("--graph-db", default=os.environ.get("CODEBASE_GRAPH_DB"),
-                        help="Path to the graph DB directory for context enrichment. Env: CODEBASE_GRAPH_DB")
-    parser.add_argument("--graph-backend", default=os.environ.get("CODEBASE_GRAPH_BACKEND", "kuzu"),
-                        choices=["kuzu", "neo4j"], help="Graph backend. Env: CODEBASE_GRAPH_BACKEND. Default: kuzu")
+                             "(e.g. src/auth).")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
     return parser
 
@@ -38,15 +34,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     load_dotenv()
     args = build_parser().parse_args()
-    db_path = Path(args.db).expanduser()
+    repo = Path(args.repo).expanduser().resolve()
+    db_path, graph_db_path = derive_db_paths(repo)
 
     db = lancedb.connect(db_path)
     if TABLE_NAME not in db.table_names():
-        raise SystemExit(f"Table '{TABLE_NAME}' not found in {db_path}. Run index first.")
+        raise SystemExit(f"Table '{TABLE_NAME}' not found in {db_path}. Run codebase-index first.")
 
     graph_store: GraphStore | None = None
-    if args.graph_db:
-        graph_store = create_graph_store(args.graph_backend, args.graph_db)
+    if graph_db_path.exists():
+        graph_store = create_graph_store("kuzu", str(graph_db_path))
 
     table = db.open_table(TABLE_NAME)
     query_vector = embed_text(args.query, model=args.model)
