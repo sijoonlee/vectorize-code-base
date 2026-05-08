@@ -133,8 +133,16 @@ claude mcp add -s user codebase-search \
   -- uv run --directory /path/to/vectorize-code-base codebase-mcp
 ```
 
-DB paths are derived automatically from the directory where Claude Code is running and the
-current git branch — no environment variables needed.
+The MCP server automatically detects the target repo via the MCP roots protocol — Claude Code
+sends its working directory as a root URI, which the server reads on every tool call. The
+current git branch is resolved from that path. No environment variables or explicit `repo`
+argument needed in normal use.
+
+If auto-detection fails (e.g. the client doesn't advertise roots), pass the repo path explicitly:
+
+```
+codebase_search(query="...", repo="/absolute/path/to/repo")
+```
 
 ### 3. (Optional) Verify in Claude Code
 
@@ -144,9 +152,9 @@ Run `/mcp` inside any Claude Code session to confirm `codebase-search` is listed
 
 | Tool | Description |
 |---|---|
-| `codebase_index` | Index a repo (vector + graph). Pass `repo` path or defaults to CWD |
-| `codebase_search` | Vector similarity search — returns ranked code chunks for a natural language query |
-| `codebase_graph_traverse` | Graph traversal — explore parent/child relationships for a named entity |
+| `codebase_index` | Index a repo (vector + graph). Repo detected via MCP roots; override with `repo` |
+| `codebase_search` | Vector similarity search — returns ranked code chunks for a query. Optional `scope` to restrict to a subdirectory, `repo` to override auto-detection |
+| `codebase_graph_traverse` | Graph traversal — explore parent/child relationships for a named entity. Optional `repo` to override auto-detection |
 
 ## Chunk metadata
 

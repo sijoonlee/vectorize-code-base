@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 import lancedb
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from codebase_search.db_paths import derive_db_paths
 from codebase_search.embed import DEFAULT_MODEL, embed_text
@@ -23,8 +23,33 @@ load_dotenv()
 mcp = FastMCP("codebase-search")
 
 
+async def _repo_from_roots(ctx: Context) -> Path | None:
+    """Ask the MCP client for its root directories and return the first as a Path."""
+    try:
+        result = await ctx.session.list_roots()
+        if result.roots:
+            uri = str(result.roots[0].uri)
+            return Path(urlparse(uri).path)
+    except Exception:
+        pass
+    return None
+
+
+async def _resolve_repo(ctx: Context, repo: str | None) -> Path:
+    if repo:
+        return Path(repo).expanduser().resolve()
+    detected = await _repo_from_roots(ctx)
+    if detected:
+        return detected
+    raise RuntimeError(
+        "Could not detect the working directory from the MCP client roots. "
+        "Pass the repo path explicitly via the 'repo' argument."
+    )
+
+
 @mcp.tool()
-def codebase_index(
+async def codebase_index(
+    ctx: Context,
     repo: str | None = None,
 ) -> dict:
     """Index a codebase for semantic search and graph traversal.
@@ -37,9 +62,9 @@ def codebase_index(
     Unchanged files are skipped via SHA256 cache. Safe to re-run after code changes.
 
     Args:
-        repo: Absolute path to the repo to index. Defaults to the current working directory.
+        repo: Absolute path to the repo to index. Defaults to the MCP client's working directory.
     """
-    repo_path = Path(repo).expanduser().resolve() if repo else Path(os.getcwd())
+    repo_path = await _resolve_repo(ctx, repo)
     try:
         return run_index(repo_path)
     except ValueError as e:
@@ -47,10 +72,12 @@ def codebase_index(
 
 
 @mcp.tool()
-def codebase_search(
+async def codebase_search(
+    ctx: Context,
     query: str,
     limit: int = 5,
     scope: str | None = None,
+    repo: str | None = None,
 ) -> list[dict]:
     """Semantic search over an indexed codebase using vector similarity.
 
@@ -58,16 +85,17 @@ def codebase_search(
     Each result includes file_path, line range, symbol name, and the code itself,
     optionally enriched with graph context (parent/child entities).
 
-    DB paths are derived from the current working directory and git branch:
+    DB paths are derived from the repo path and git branch:
     db/<repo-name>/<branch>/vector  and  db/<repo-name>/<branch>/graph
 
     Args:
         query: Natural language description of what you are looking for.
         limit: Number of results to return (default 5).
         scope: Restrict results to files under this directory prefix, e.g. "src/auth".
+        repo: Absolute path to the indexed repo. Defaults to the MCP client's working directory.
     """
-    repo = Path(os.getcwd())
-    db_path, graph_db_path = derive_db_paths(repo)
+    repo_path = await _resolve_repo(ctx, repo)
+    db_path, graph_db_path = derive_db_paths(repo_path)
 
     lance_db = lancedb.connect(db_path)
     if TABLE_NAME not in lance_db.table_names():
@@ -92,19 +120,21 @@ def codebase_search(
 
 
 @mcp.tool()
-def codebase_graph_traverse(
+async def codebase_graph_traverse(
+    ctx: Context,
     query: str = "",
     depth: int = 1,
     scope: str | None = None,
     roots: bool = False,
     leaves: bool = False,
+    repo: str | None = None,
 ) -> list[dict]:
     """Traverse the code graph by entity name, or list root/leaf nodes.
 
     Use to explore how classes, functions, and files relate to each other.
     At least one of query, roots, or leaves must be set.
 
-    DB path is derived from the current working directory and git branch:
+    DB path is derived from the repo path and git branch:
     db/<repo-name>/<branch>/graph
 
     Args:
@@ -113,11 +143,13 @@ def codebase_graph_traverse(
         scope: Restrict to entities whose file_path starts with this prefix.
         roots: Include root ancestor of each matched entity (or list all roots if no query).
         leaves: Include leaf descendants of each matched entity (or list all leaves if no query).
+        repo: Absolute path to the indexed repo. Defaults to the MCP client's working directory.
     """
     if not query and not roots and not leaves:
         raise ValueError("Provide query, roots=True, or leaves=True.")
 
-    _, graph_db_path = derive_db_paths(Path(os.getcwd()))
+    repo_path = await _resolve_repo(ctx, repo)
+    _, graph_db_path = derive_db_paths(repo_path)
     graph_store = create_graph_store("kuzu", str(graph_db_path))
     scope_prefix = scope.rstrip("/") + "/" if scope else None
 
