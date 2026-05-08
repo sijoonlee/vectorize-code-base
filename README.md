@@ -3,8 +3,13 @@
 A local CLI prototype for semantic codebase search.
 
 Code is chunked with tree-sitter, then embeddings are loaded through LangChain's Ollama
-integration and stored in LanceDB. Optionally, a graph DB (Kuzu or Neo4j) can be populated
-alongside to store entity relationships for graph-aware queries.
+integration and stored in LanceDB. A Kuzu graph DB is populated alongside to store entity
+relationships for graph-aware queries.
+
+## Prerequisites
+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) must be installed locally
+- [ollama](https://docs.ollama.com/quickstart) must be installed locally
 
 ## Setup
 
@@ -15,67 +20,57 @@ ollama pull qwen3-embedding:0.6b
 
 Ollama must be running locally when indexing or searching.
 
-## Environment variables
+## Database layout
 
-Set these to avoid repeating paths on every command:
+All databases are stored inside this project under `db/`:
 
-| Variable | Flag | Description |
-|---|---|---|
-| `CODEBASE_REPO` | `--repo` | Path to the repo root |
-| `CODEBASE_DB` | `--db` | Path to the LanceDB directory |
-| `CODEBASE_GRAPH_DB` | `--graph-db` | Path to the graph DB directory |
-| `CODEBASE_GRAPH_BACKEND` | `--graph-backend` | `kuzu` (default) or `neo4j` |
-
-```bash
-export CODEBASE_REPO=/path/to/repo
-export CODEBASE_DB=./codebase.lancedb
-export CODEBASE_GRAPH_DB=./codebase.kuzu
+```
+db/
+  <repo-name>/
+    <branch>/
+      vector/    ← LanceDB
+      graph/     ← Kuzu
 ```
 
-CLI flags take precedence over environment variables when both are provided.
+If the repo is not a git repository, `<branch>` is `local`.
+
+Example for `jira-issue-solver` on branch `main`:
+```
+db/jira-issue-solver/main/vector
+db/jira-issue-solver/main/graph
+```
 
 ## Commands
 
 ### Index
 
-```bash
-uv run codebase-index
-# or without env vars:
-uv run codebase-index --repo /path/to/repo --db ./codebase.lancedb
-```
-
-Each chunk is embedded with metadata (entity type, symbol name, file path) prepended to the
-code text, so queries like "how is profile created?" match on both name and implementation.
-
-Unchanged files are skipped on re-runs using a SHA256 content cache stored at
-`./codebase.lancedb/cache/`.
-
-With graph DB (optional):
+Index a repo (both vector and graph are always written):
 
 ```bash
-uv run codebase-index --graph-db ./codebase.kuzu
+uv run codebase-index --repo /path/to/repo
 ```
 
-This populates a Kuzu graph DB alongside LanceDB with nodes (`file`, `class`, `function`,
-`method`) and `contains` edges representing the code structure.
-
-To use Neo4j instead (requires `pip install codebase-search[neo4j]` and a running Neo4j server):
-
-```bash
-uv run codebase-index --graph-db bolt://localhost:7687 --graph-backend neo4j
-```
+Unchanged files are skipped on re-runs using a SHA256 content cache stored inside the vector DB directory.
 
 ### Search
 
-Vector search with optional graph context enrichment:
+Vector search with automatic graph context enrichment:
 
 ```bash
+# from inside the repo directory
 uv run codebase-search --query "how is profile created?"
+
+# from anywhere, specifying the repo
+uv run codebase-search --repo /path/to/repo --query "how is profile created?"
+
+# restrict to a subdirectory
+uv run codebase-search --query "how is profile created?" --scope src/services
+
+# machine-readable output
 uv run codebase-search --query "how is profile created?" --json
 ```
 
-When `CODEBASE_GRAPH_DB` is set (or `--graph-db` is passed), each result is enriched with
-its parent entity from the graph. Example output:
+Example output:
 
 ```
 1. src/services/user.py:10-25  createProfile  distance=0.1234
@@ -111,16 +106,47 @@ The query is a case-insensitive partial match against entity labels.
 When a file is deleted from the repo, remove its records from both stores:
 
 ```bash
-uv run codebase-remove src/services/user.py
-# or without env vars:
-uv run codebase-remove --repo /path/to/repo --db ./codebase.lancedb src/services/user.py
+uv run codebase-remove --repo /path/to/repo src/services/user.py
 ```
 
-With graph DB:
+## Environment variables
+
+| Variable | Description |
+|---|---|
+| `CODEBASE_REPO` | Default repo path for all commands |
+
+## Claude Code MCP integration
+
+This tool can be exposed as an MCP server so Claude Code can call `codebase_search` and
+`codebase_graph_traverse` as native tools in any session, including headless `claude -p` mode.
+
+### 1. Index your repo first
 
 ```bash
-uv run codebase-remove --graph-db ./codebase.kuzu src/services/user.py
+uv run codebase-index --repo /path/to/repo
 ```
+
+### 2. Register the MCP server globally
+
+```bash
+claude mcp add -s user codebase-search \
+  -- uv run --directory /path/to/vectorize-code-base codebase-mcp
+```
+
+DB paths are derived automatically from the directory where Claude Code is running and the
+current git branch — no environment variables needed.
+
+### 3. (Optional) Verify in Claude Code
+
+Run `/mcp` inside any Claude Code session to confirm `codebase-search` is listed as connected.
+
+### Available MCP tools
+
+| Tool | Description |
+|---|---|
+| `codebase_index` | Index a repo (vector + graph). Pass `repo` path or defaults to CWD |
+| `codebase_search` | Vector similarity search — returns ranked code chunks for a natural language query |
+| `codebase_graph_traverse` | Graph traversal — explore parent/child relationships for a named entity |
 
 ## Chunk metadata
 
@@ -140,8 +166,6 @@ Each LanceDB record stores:
 
 ## Graph schema
 
-When `--graph-db` is provided, Kuzu/Neo4j stores:
-
 **Nodes (`Entity`):** `id`, `label`, `entity_type` (`file`/`class`/`function`/`method`), `file_path`, `source_location`
 
 **Edges (`RELATES`):** `relation` (`contains`)
@@ -150,9 +174,6 @@ When `--graph-db` is provided, Kuzu/Neo4j stores:
 
 Python, JavaScript (`.js`, `.jsx`), TypeScript (`.ts`, `.tsx`)
 
-## Compatibility wrappers
+## Limitations
 
-```bash
-uv run python index.py --repo /path/to/repo --db ./codebase.lancedb
-uv run python search.py --db ./codebase.lancedb --query "..."
-```
+- **Indexing always does a full reset** — both the vector store and graph DB are wiped and rebuilt on every `codebase-index` run. Only the embedding step is cached (unchanged files skip re-embedding), but all records are rewritten to disk regardless.

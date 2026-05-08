@@ -3,7 +3,10 @@
 __pycache__/
 *.py[cod]
 
+db/
+
 *.lancedb/
 *.db
 *.sqlite
 *.sqlite3
+.env
