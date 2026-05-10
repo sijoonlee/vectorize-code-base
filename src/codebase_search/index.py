@@ -49,6 +49,8 @@ def run_index(repo: Path, model: str = DEFAULT_MODEL, batch_size: int = 16) -> d
 
     all_records: list[dict] = []
     pending_files: list[tuple[Path, list[CodeChunk]]] = []
+    graph_nodes: list[dict] = []
+    graph_edges: list[dict] = []
 
     for source_file in source_files:
         cached = load_cached(source_file, repo, cache_dir)
@@ -60,8 +62,11 @@ def run_index(repo: Path, model: str = DEFAULT_MODEL, batch_size: int = 16) -> d
                 pending_files.append((source_file, file_chunks))
 
         result = extract_file(source_file, repo)
-        graph_store.insert_nodes(result["nodes"])
-        graph_store.insert_edges(result["edges"])
+        graph_nodes.extend(result["nodes"])
+        graph_edges.extend(result["edges"])
+
+    graph_store.insert_nodes(graph_nodes)
+    graph_store.insert_edges(graph_edges)
 
     cached_count = len(source_files) - len(pending_files)
     if cached_count:

@@ -101,13 +101,43 @@ class  UserService  src/services/user.py:L1
 
 The query is a case-insensitive partial match against entity labels.
 
-### Remove a deleted file
+### Report a changed file
 
-When a file is deleted from the repo, remove its records from both stores:
+Record that a file was created, updated, or removed without eagerly rebuilding it:
 
 ```bash
-uv run codebase-remove --repo /path/to/repo src/services/user.py
+uv run codebase-file-change --repo /path/to/repo --event updated src/services/user.py
+uv run codebase-file-change --repo /path/to/repo --event created src/services/new_user.py
+uv run codebase-file-change --repo /path/to/repo --event removed src/services/old_user.py
 ```
+
+Created and updated files are marked stale for later refresh. Removed files are cleaned
+from vector and graph stores immediately, then recorded as removed.
+
+## Lazy refresh
+
+File-change reporting does not eagerly rebuild embeddings or graph edges. It records
+pending work under the repo/branch DB directory:
+
+```text
+db/<repo-name>/<branch>/state/file_changes.json
+```
+
+The `<branch>` segment is the current git branch. If the repo is not a git repository, the
+branch segment is `local`. Query commands derive this path from the repo's current branch,
+so pending changes recorded for another branch are not processed.
+
+Before `codebase-search`, `codebase-graph-traverse`, or their MCP equivalents run a query,
+they process all pending file changes for the current branch:
+
+- `created`: index that file into vector and graph stores, then clear the pending state.
+- `updated`: delete old records, re-index that file, then clear the pending state.
+- `removed`: delete vector chunks and graph nodes idempotently, then clear the pending
+  state.
+
+This means changed files are refreshed at query time, not when the file-change event is
+reported. Removed files should not appear in query results because removals are cleaned up
+both when reported and again before the next query if still pending.
 
 ## Environment variables
 
@@ -174,9 +204,66 @@ Each LanceDB record stores:
 
 ## Graph schema
 
-**Nodes (`Entity`):** `id`, `label`, `entity_type` (`file`/`class`/`function`/`method`), `file_path`, `source_location`
+The graph uses one physical Kuzu node table and one physical relationship table:
 
-**Edges (`RELATES`):** `relation` (`contains`)
+- Node table: `Entity`
+- Relationship table: `RELATES`
+
+Logical node and edge meaning is stored in properties.
+
+### Nodes
+
+Each `Entity` node represents a file or symbol.
+
+| Field | Description |
+|---|---|
+| `id` | Stable graph id derived from file path and symbol name |
+| `label` | Display name, such as `login.ts`, `AuthService`, or `loginUser` |
+| `entity_type` | Logical type: `file`, `class`, `function`, or `method` |
+| `file_path` | Repo-relative source path |
+| `source_location` | Source line marker, such as `L12` |
+
+Examples:
+
+```text
+Entity(file: src/auth/login.ts)
+Entity(function: loginUser)
+Entity(class: AuthService)
+Entity(method: login)
+```
+
+### Edges
+
+Each `RELATES` edge connects one `Entity` to another `Entity`.
+
+| Field | Description |
+|---|---|
+| `relation` | Logical edge type |
+| `confidence` | Rule-derived confidence score from `0.0` to `1.0` |
+| `source` | How the edge was derived, such as `ast_direct_identifier_call` |
+| `details` | Optional debug/context detail |
+
+Current relation values:
+
+| Relation | Meaning |
+|---|---|
+| `contains` | File/class structurally owns a symbol |
+| `imports` | File imports another local file |
+| `exports` | File explicitly exports a symbol |
+| `calls` | Symbol directly calls another resolved symbol |
+| `referenced_by` | Reverse edge for an emitted call/reference |
+| `member_of` | Method belongs to a class |
+
+Example:
+
+```text
+src/auth/login.ts -[contains]-> loginUser
+src/auth/login.ts -[imports]-> src/auth/session.ts
+src/auth/session.ts -[exports]-> createSession
+loginUser -[calls {confidence: 0.85, source: ast_import_alias_call}]-> createSession
+createSession -[referenced_by]-> loginUser
+login -[member_of]-> AuthService
+```
 
 ## Supported languages
 

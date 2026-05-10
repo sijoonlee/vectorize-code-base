@@ -12,6 +12,7 @@ import lancedb
 
 from codebase_search.db_paths import derive_db_paths
 from codebase_search.embed import DEFAULT_MODEL, embed_text
+from codebase_search.file_changes import process_pending_file_changes
 from codebase_search.graph.base import GraphStore
 from codebase_search.graph.factory import create_graph_store
 from codebase_search.index import TABLE_NAME
@@ -35,6 +36,7 @@ def main() -> None:
     load_dotenv()
     args = build_parser().parse_args()
     repo = Path(args.repo).expanduser().resolve()
+    process_pending_file_changes(repo, model=args.model)
     db_path, graph_db_path = derive_db_paths(repo)
 
     db = lancedb.connect(db_path)
@@ -112,9 +114,11 @@ def _fetch_ancestors(graph_store: GraphStore, entity_id: str, depth: int) -> lis
         next_frontier = []
         for nid in frontier:
             rows = graph_store.query(
-                "MATCH (parent:Entity)-[:RELATES]->(n:Entity) WHERE n.id = $id "
+                "MATCH (parent:Entity)-[r:RELATES]->(n:Entity) WHERE n.id = $id "
                 "RETURN parent.id AS id, parent.label AS label, "
-                "parent.entity_type AS entity_type, parent.source_location AS source_location",
+                "parent.entity_type AS entity_type, parent.source_location AS source_location, "
+                "r.relation AS relation, r.confidence AS confidence, "
+                "r.source AS edge_source, r.details AS details",
                 {"id": nid},
             )
             for row in rows:
@@ -138,9 +142,11 @@ def _fetch_descendants(graph_store: GraphStore, entity_id: str, depth: int) -> l
         next_frontier = []
         for nid in frontier:
             rows = graph_store.query(
-                "MATCH (n:Entity)-[:RELATES]->(child:Entity) WHERE n.id = $id "
+                "MATCH (n:Entity)-[r:RELATES]->(child:Entity) WHERE n.id = $id "
                 "RETURN child.id AS id, child.label AS label, "
-                "child.entity_type AS entity_type, child.source_location AS source_location",
+                "child.entity_type AS entity_type, child.source_location AS source_location, "
+                "r.relation AS relation, r.confidence AS confidence, "
+                "r.source AS edge_source, r.details AS details",
                 {"id": nid},
             )
             for row in rows:
@@ -169,13 +175,18 @@ def _print_results(results: list[dict[str, Any]], scope: str | None = None) -> N
         ctx = result.get("graph_context")
         if ctx:
             if ctx["parents"]:
-                parents_str = ", ".join(_format_entity(p) for p in ctx["parents"])
-                print(f"   [parents: {parents_str}  {ctx['file_path']}]")
+                parents_str = ", ".join(_format_relation_entity(p) for p in ctx["parents"])
+                print(f"   [incoming: {parents_str}  {ctx['file_path']}]")
             if ctx["children"]:
-                children_str = ", ".join(_format_entity(c) for c in ctx["children"])
-                print(f"   [children: {children_str}]")
+                children_str = ", ".join(_format_relation_entity(c) for c in ctx["children"])
+                print(f"   [outgoing: {children_str}]")
         print(_indent_code(result["code"]))
         print()
+
+
+def _format_relation_entity(e: dict) -> str:
+    relation = e.get("relation") or "relates"
+    return f"{relation} {_format_entity(e)}"
 
 
 def _format_entity(e: dict) -> str:

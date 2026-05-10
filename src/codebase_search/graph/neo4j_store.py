@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from codebase_search.graph.base import GraphStore
+from codebase_search.graph.base import GraphStore, normalize_edge
 
 
 class Neo4jStore(GraphStore):
@@ -29,12 +29,16 @@ class Neo4jStore(GraphStore):
             )
 
     def insert_edges(self, edges: list[dict]) -> None:
+        payloads = [normalize_edge(edge) for edge in edges]
         with self._driver.session() as s:
             s.run(
                 "UNWIND $edges AS e "
                 "MATCH (a:Entity {id: e.source}), (b:Entity {id: e.target}) "
-                "MERGE (a)-[:RELATES {relation: e.relation}]->(b)",
-                edges=edges,
+                "MERGE (a)-[r:RELATES {relation: e.relation}]->(b) "
+                "SET r.confidence = e.confidence, "
+                "    r.source = e.edge_source, "
+                "    r.details = e.details",
+                edges=payloads,
             )
 
     def delete_file(self, rel_path: str) -> None:

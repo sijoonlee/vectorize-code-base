@@ -4,7 +4,7 @@ from pathlib import Path
 
 import kuzu
 
-from codebase_search.graph.base import GraphStore
+from codebase_search.graph.base import GraphStore, normalize_edge
 
 
 class KuzuStore(GraphStore):
@@ -22,7 +22,8 @@ class KuzuStore(GraphStore):
         )
         self._conn.execute(
             "CREATE REL TABLE IF NOT EXISTS RELATES("
-            "FROM Entity TO Entity, relation STRING)"
+            "FROM Entity TO Entity, relation STRING, confidence DOUBLE, "
+            "source STRING, details STRING)"
         )
 
     def insert_nodes(self, nodes: list[dict]) -> None:
@@ -44,14 +45,19 @@ class KuzuStore(GraphStore):
 
     def insert_edges(self, edges: list[dict]) -> None:
         for edge in edges:
+            payload = normalize_edge(edge)
             try:
                 self._conn.execute(
                     "MATCH (a:Entity {id: $src}), (b:Entity {id: $tgt}) "
-                    "CREATE (a)-[:RELATES {relation: $rel}]->(b)",
+                    "CREATE (a)-[:RELATES {relation: $rel, confidence: $confidence, "
+                    "source: $source, details: $details}]->(b)",
                     {
-                        "src": edge["source"],
-                        "tgt": edge["target"],
-                        "rel": edge.get("relation", ""),
+                        "src": payload["source"],
+                        "tgt": payload["target"],
+                        "rel": payload["relation"],
+                        "confidence": payload["confidence"],
+                        "source": payload["edge_source"],
+                        "details": payload["details"],
                     },
                 )
             except Exception:

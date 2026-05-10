@@ -9,6 +9,7 @@ from mcp.server.fastmcp import Context, FastMCP
 
 from codebase_search.db_paths import derive_db_paths
 from codebase_search.embed import DEFAULT_MODEL, embed_text
+from codebase_search.file_changes import process_pending_file_changes
 from codebase_search.graph.factory import create_graph_store
 from codebase_search.graph_search import (
     _fetch_descendants,
@@ -95,6 +96,7 @@ async def codebase_search(
         repo: Absolute path to the indexed repo. Defaults to the MCP client's working directory.
     """
     repo_path = await _resolve_repo(ctx, repo)
+    process_pending_file_changes(repo_path, model=DEFAULT_MODEL)
     db_path, graph_db_path = derive_db_paths(repo_path)
 
     lance_db = lancedb.connect(db_path)
@@ -149,6 +151,7 @@ async def codebase_graph_traverse(
         raise ValueError("Provide query, roots=True, or leaves=True.")
 
     repo_path = await _resolve_repo(ctx, repo)
+    process_pending_file_changes(repo_path)
     _, graph_db_path = derive_db_paths(repo_path)
     graph_store = create_graph_store("kuzu", str(graph_db_path))
     scope_prefix = scope.rstrip("/") + "/" if scope else None
@@ -176,7 +179,8 @@ async def codebase_graph_traverse(
 
         scope_clause = " AND n.file_path STARTS WITH $scope" if scope_prefix else ""
         matches = graph_store.query(
-            f"MATCH (n:Entity) WHERE lower(n.label) CONTAINS lower($q){scope_clause} "
+            f"MATCH (n:Entity) WHERE (lower(n.label) CONTAINS lower($q) "
+            f"OR lower(n.file_path) CONTAINS lower($q)){scope_clause} "
             "RETURN n.id AS id, n.label AS label, n.entity_type AS entity_type, "
             "n.file_path AS file_path, n.source_location AS source_location "
             "ORDER BY n.entity_type, n.label",
@@ -186,9 +190,11 @@ async def codebase_graph_traverse(
         results = []
         for entity in matches:
             parent_rows = graph_store.query(
-                "MATCH (parent:Entity)-[:RELATES]->(n:Entity) WHERE n.id = $id "
+                "MATCH (parent:Entity)-[r:RELATES]->(n:Entity) WHERE n.id = $id "
                 "RETURN parent.label AS label, parent.entity_type AS entity_type, "
-                "parent.source_location AS source_location LIMIT 1",
+                "parent.source_location AS source_location, r.relation AS relation, "
+                "r.confidence AS confidence, r.source AS edge_source, "
+                "r.details AS details LIMIT 1",
                 {"id": entity["id"]},
             )
             results.append({

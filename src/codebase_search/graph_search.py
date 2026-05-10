@@ -8,6 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from codebase_search.db_paths import derive_db_paths
+from codebase_search.file_changes import process_pending_file_changes
 from codebase_search.graph.base import GraphStore
 from codebase_search.graph.factory import create_graph_store
 
@@ -38,7 +39,9 @@ def main() -> None:
     if not args.query and not args.roots and not args.leaves:
         raise SystemExit("Provide --query, --roots, or --leaves.")
 
-    _, graph_db_path = derive_db_paths(Path(args.repo).expanduser().resolve())
+    repo = Path(args.repo).expanduser().resolve()
+    process_pending_file_changes(repo)
+    _, graph_db_path = derive_db_paths(repo)
     graph_store = create_graph_store("kuzu", str(graph_db_path))
     scope_prefix = args.scope.rstrip("/") + "/" if args.scope else None
 
@@ -71,7 +74,8 @@ def main() -> None:
     # --query mode
     scope_clause = " AND n.file_path STARTS WITH $scope" if scope_prefix else ""
     matches = graph_store.query(
-        f"MATCH (n:Entity) WHERE lower(n.label) CONTAINS lower($q){scope_clause} "
+        f"MATCH (n:Entity) WHERE (lower(n.label) CONTAINS lower($q) "
+        f"OR lower(n.file_path) CONTAINS lower($q)){scope_clause} "
         "RETURN n.id AS id, n.label AS label, n.entity_type AS entity_type, "
         "n.file_path AS file_path, n.source_location AS source_location "
         "ORDER BY n.entity_type, n.label",
@@ -86,10 +90,12 @@ def main() -> None:
     results = []
     for entity in matches:
         parent_rows = graph_store.query(
-            "MATCH (parent:Entity)-[:RELATES]->(n:Entity) "
+            "MATCH (parent:Entity)-[r:RELATES]->(n:Entity) "
             "WHERE n.id = $id "
             "RETURN parent.label AS label, parent.entity_type AS entity_type, "
-            "parent.source_location AS source_location LIMIT 1",
+            "parent.source_location AS source_location, r.relation AS relation, "
+            "r.confidence AS confidence, r.source AS edge_source, "
+            "r.details AS details LIMIT 1",
             {"id": entity["id"]},
         )
         descendants = _fetch_descendants(graph_store, entity["id"], args.depth)
@@ -118,26 +124,29 @@ def _fetch_descendants(graph_store: GraphStore, entity_id: str, depth: int) -> l
     frontier = [entity_id]
     all_descendants: list[dict] = []
 
-    for _ in range(depth):
+    for current_depth in range(1, depth + 1):
         next_frontier = []
         for nid in frontier:
             children = graph_store.query(
-                "MATCH (n:Entity)-[:RELATES]->(child:Entity) "
+                "MATCH (n:Entity)-[r:RELATES]->(child:Entity) "
                 "WHERE n.id = $id "
                 "RETURN child.id AS id, child.label AS label, child.entity_type AS entity_type, "
-                "child.file_path AS file_path, child.source_location AS source_location",
+                "child.file_path AS file_path, child.source_location AS source_location, "
+                "r.relation AS relation, r.confidence AS confidence, "
+                "r.source AS edge_source, r.details AS details",
                 {"id": nid},
             )
             for child in children:
                 if child["id"] not in visited:
                     visited.add(child["id"])
+                    child["depth"] = current_depth
                     all_descendants.append(child)
                     next_frontier.append(child["id"])
         frontier = next_frontier
         if not frontier:
             break
 
-    return sorted(all_descendants, key=lambda x: (x["entity_type"], x["label"]))
+    return sorted(all_descendants, key=lambda x: (x["depth"], x["entity_type"], x["label"]))
 
 
 def _fetch_root_ancestor(graph_store: GraphStore, entity_id: str) -> dict | None:
@@ -148,10 +157,12 @@ def _fetch_root_ancestor(graph_store: GraphStore, entity_id: str) -> dict | None
 
     while True:
         rows = graph_store.query(
-            "MATCH (parent:Entity)-[:RELATES]->(n:Entity) "
+            "MATCH (parent:Entity)-[r:RELATES]->(n:Entity) "
             "WHERE n.id = $id "
             "RETURN parent.id AS id, parent.label AS label, parent.entity_type AS entity_type, "
-            "parent.file_path AS file_path, parent.source_location AS source_location LIMIT 1",
+            "parent.file_path AS file_path, parent.source_location AS source_location, "
+            "r.relation AS relation, r.confidence AS confidence, "
+            "r.source AS edge_source, r.details AS details LIMIT 1",
             {"id": current_id},
         )
         if not rows or rows[0]["id"] in visited:
@@ -186,12 +197,21 @@ def _print_results(results: list[dict], depth: int) -> None:
             print(f"  root: {r['entity_type']} {r['label']}  {r['file_path']}:{r['source_location']}")
         if item["parent"]:
             p = item["parent"]
-            print(f"  parent: {p['entity_type']} {p['label']}  {p['source_location']}")
+            relation = p.get("relation") or "parent"
+            print(f"  {relation}: {p['entity_type']} {p['label']}  {p['source_location']}")
         if item["descendants"]:
-            label = f"descendants (depth={depth})"
+            label = f"outgoing relations (max_depth={depth})"
             print(f"  {label} ({len(item['descendants'])}):")
+            current_depth = None
             for child in item["descendants"]:
-                print(f"    {child['entity_type']:<10} {child['label']:<30} {child['source_location']}")
+                if child.get("depth") != current_depth:
+                    current_depth = child.get("depth")
+                    print(f"    depth {current_depth}:")
+                relation = child.get("relation") or "relates"
+                print(
+                    f"      {relation:<14} {child['entity_type']:<10} "
+                    f"{child['label']:<30} {child['source_location']}"
+                )
         if item.get("leaf_descendants"):
             print(f"  leaves ({len(item['leaf_descendants'])}):")
             for leaf in item["leaf_descendants"]:

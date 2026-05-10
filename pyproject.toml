@@ -23,7 +23,7 @@ neo4j = ["neo4j>=5.0.0"]
 [project.scripts]
 codebase-index = "codebase_search.index:main"
 codebase-search = "codebase_search.search:main"
-codebase-remove = "codebase_search.remove:main"
+codebase-file-change = "codebase_search.file_changes:main"
 codebase-graph-traverse = "codebase_search.graph_search:main"
 codebase-mcp = "codebase_search.mcp_server:main"
 
