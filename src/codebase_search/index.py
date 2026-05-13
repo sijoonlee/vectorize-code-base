@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import shutil
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -38,7 +39,8 @@ def run_index(repo: Path, model: str = DEFAULT_MODEL, batch_size: int = 16) -> d
     db_path, graph_db_path = derive_db_paths(repo)
     cache_dir = db_path / "cache"
     db_path.mkdir(parents=True, exist_ok=True)
-    graph_db_path.mkdir(parents=True, exist_ok=True)
+    if graph_db_path.exists():  # Kuzu initializes its own dir structure, so wipe any existing one first
+        shutil.rmtree(graph_db_path)
 
     graph_store = create_graph_store("kuzu", str(graph_db_path))
     graph_store.clear()
